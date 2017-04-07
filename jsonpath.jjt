@@ -1,0 +1,360 @@
+
+options {
+STATIC=false;
+DEBUG_PARSER=false;
+ERROR_REPORTING=true;
+//VISITOR=true;
+//MULTI=true;
+NODE_USES_PARSER=false;
+NODE_FACTORY="JSONPathCompiler";
+NODE_CLASS="JSONNode";
+
+}
+
+PARSER_BEGIN(JSONPathCompiler)
+
+import java.util.Iterator;
+import java.lang.reflect.*;
+import java.util.Map.*;
+import java.util.Stack;
+import java.util.Random;
+
+public class JSONPathCompiler {
+    private static final Stack varstack = new Stack();
+    
+    
+
+    public static FilterExpression fe = new FilterExpression();
+
+    public static AQLQuery q = new AQLQuery();
+    
+    public static class JSONNode extends SimpleNode {
+
+        JSONNode(int i) {
+            super(i);
+        }
+
+        public int getChildrenCount() {
+            return this.children==null?0:children.length;
+        }
+
+        public JSONNode at(int index) {
+            return (JSONNode)(
+                this.children==null ||
+                index<0 ||
+                index>=this.children.length ?
+                null:
+                this.children[index]
+                );
+        }
+
+        public String getName() {
+            return JSONPathCompilerTreeConstants.jjtNodeName[this.id];
+        }
+
+        public void dump(String prefix) {
+            System.out.println(prefix+toString());
+            if( children!=null && children.length>0) {
+                System.out.println(prefix+"  [");
+                
+                for (int i = 0; children!=null && i < children.length; ++i) {
+                    System.out.print(prefix+"   ("+(i+1)+")");
+                    SimpleNode c= (SimpleNode)children[i];
+                    
+                    if(c==null) {
+                        System.out.println("null");
+                    } else {
+                        c.dump(prefix+"    ");
+                    }
+                }
+                
+                System.out.println(prefix+" ]");
+            }
+        }
+
+
+        public Object eval(Object o) {
+            if(o==null) 
+                return null;
+            switch(this.id) {
+                case JJTEXPRESSION: {
+                    if(getChildrenCount()==0) 
+                        return null;
+                    
+                    //JSONPathCompiler.varstack.push(o);
+                    for(int i=0;o!=null && i< getChildrenCount();++i) {
+                        
+                        
+                        if (!JSONPathCompiler.varstack.empty()) {
+                            Object oParent = JSONPathCompiler.varstack.peek();
+                            JSONPathCompiler.q.add_for(JJTCurrentNodeToAQL(o, oParent)); 
+                        }
+                        
+                        JSONPathCompiler.varstack.push(o);
+                        o=at(i).eval(o);
+                    }
+
+                    JSONPathCompiler.q.add_ret(JSONPathCompiler.varstack.peek().toString());
+                    return o;
+                }
+                case JJTARRAY: {
+                    int index= Integer.class.cast(this.value);
+                    if(o instanceof java.util.List) {
+                            java.util.List L=java.util.List.class.cast(o);
+                            if(index<0 || index>= L.size()) return null;
+                            return L.get(index);
+                    }
+                    else if(o.getClass().isArray()){
+                            Object L[]=(Object[])o;
+                            if(index<0 || index>= L.length) return null;
+                            return L[index];
+                    }
+                    return null;
+                }
+                case JJTOBJECT: {
+                    if(o instanceof java.util.Map) {
+                            java.util.Map M=java.util.Map.class.cast(o);
+                            if (!JSONPathCompiler.varstack.empty() && !(M.get(this.value) instanceof java.util.Map)) {
+                                Object oParent = JSONPathCompiler.varstack.peek(); 
+                                //JSONPathCompiler.varstack.push(this.value);
+                                //JSONPathCompiler.q.add_for(JJTCurrentNodeToAQL(o, oParent));
+                                JSONPathCompiler.q.add_where("$" + o + " = " + this.value);
+                                String obj = o.toString();
+                            }
+                            return M.get(this.value);
+                    }
+                    return null;
+                }
+                
+                case JJTFILTEREXPR: {
+                    System.out.println("in filter: " + o);
+                    if (getChildrenCount() == 0)
+                        return null;
+                    
+                    // TODO: Check if JSON object is a Map or Array
+                    if (o instanceof java.util.List) {
+                        
+                        java.util.List L=java.util.List.class.cast(o);
+                        // Get JSON object and cast to Map
+                        Iterator<Object> lIter = L.iterator();
+                        while (lIter.hasNext()) {
+                            filter_map(lIter.next());
+                        }
+                    }
+                    else {
+                        filter_map(o);
+                    }
+        
+                    JSONPathCompiler.q.add_where(JSONPathCompiler.varstack.peek() + "." + fe.toString());
+                        /*
+                    for (int i=0; o!=null; ++i) {
+                        o = at(i).eval(o);
+                    }
+                    */
+                    return o;
+                }
+                
+
+                default:
+                    System.err.println("Doesn't handle "+this.id);
+                    break;
+            }
+            return null;
+        }
+        void filter_map(Object o) {
+            java.util.Map M=java.util.Map.class.cast(o);
+            Iterator<Entry<String, String>> mapIterator = M.entrySet().iterator();
+            // Go through object and check filter condition.
+            
+            System.out.println(mapIterator);
+
+            while (mapIterator.hasNext()) {
+                Entry<String, String> entry = mapIterator.next();
+                String k = String.valueOf(entry.getKey());
+                String v = String.valueOf(entry.getValue());
+                System.out.println(k + ": " + v);
+                // Evaluate boolean expression
+                if (fe.obj.equals(k)) {
+                    System.out.println(k + ": " + v);
+                    System.out.println(fe.toString());
+                    String obj = o.toString();
+                }
+            }
+        }    
+        private String JJTCurrentNodeToAQL(Object var1, Object var2) {
+            return "for $" + var1 + " in $" + var2 + "\n";   
+        }
+
+        private String JJTObjectToAQL(Object parent) {
+            String for_clause = "for $" + this.value + " in $" + parent.toString();
+            //String where_clause = "where $" + this.value + "=" + "\"" + this.value + "\"" + "\n";
+            
+            //JSONPathCompiler.q.add_ret(this.value.toString());
+            return for_clause;        
+        }
+
+
+    } // end JSONNode class definition 
+    
+    
+
+    static SimpleNode jjtCreate(int id) {
+        return new JSONNode(id);
+    }
+
+    public static void main(String args[]) {
+        try {
+            java.io.StringReader r= new java.io.StringReader(args[0]);
+            JSONPathCompiler app= new JSONPathCompiler(r);
+            JSONNode x=JSONNode.class.cast(app.expr());
+            //x.dump("[xpath]");
+            java.util.Map<String,Object> o1=new java.util.HashMap<String,Object>();
+            java.util.HashMap o2=new java.util.HashMap<String,Object>();
+            java.util.List<Object> o3=new java.util.ArrayList<Object>();
+            java.util.HashMap o4=new java.util.HashMap<String,Object>();
+            java.util.HashMap o5=new java.util.HashMap<String,Object>();
+            
+            String datasetName = "HelloWorld";
+            /*
+            o1.put("a",o3);
+            o1.put("b",null);
+            o1.put("c",Boolean.FALSE);
+            o1.put("d",o2);
+
+            o3.add("Hello");
+            o3.add("World");
+            o3.add(Boolean.TRUE);
+            o3.add(Boolean.FALSE);
+            o3.add(null);
+            o3.add(o2);
+
+            o2.put("name","Pierre");
+            o2.put("year",2009);
+            o2.put("price", 35);
+            */
+
+            o5.put("category", "referance");
+            o5.put("author", "Nigel Rees");
+            o5.put("title", "Sayings of the Century");
+            o5.put("price", 8.95);
+
+            o3.add(o5);
+
+            o5=new java.util.HashMap<String,Object>();
+            o5.put("category", "fiction");
+            o5.put("author", "Evelyn Waugh");
+            o5.put("title", "Sword of Honour");
+            o5.put("price", 12.99);
+            o3.add(o5);
+            
+            o5=new java.util.HashMap<String,Object>();
+            o5.put("category", "fiction");
+            o5.put("author", "Herman Melville");
+            o5.put("title", "Moby Dick");
+            o5.put("isbn", "0-553-21311-3");
+            o5.put("price", 8.99);
+            o3.add(o5);
+
+            o5=new java.util.HashMap<String,Object>();
+            o5.put("category", "fiction");
+            o5.put("author", "J. R. R. Tolkien");
+            o5.put("title", "The Lord of the Rings");
+            o5.put("isbn", "0-395-19395-8");
+            o5.put("price", 22.99);
+            o3.add(o5);
+            
+            o4.put("color", "red");
+            o4.put("price", 19.95);
+
+            o2.put("book", o3);
+            o2.put("bicycle", o4);
+            o1.put("store", o2);
+            o1.put("expensive", 10);
+            
+            //AQLQuery q = new AQLQuery(o1);
+            
+            //JSONPathCompiler.varstack.push(o1);
+            JSONPathCompiler.q.add_root("for $" + o1 + " in dataset " + datasetName + "\n");
+            //JSONPathCompiler.varstack.push(o1.toString());
+            Object o=x.eval(o1);
+            while (!JSONPathCompiler.varstack.empty())
+                JSONPathCompiler.varstack.pop();
+            System.err.println("Compiling <code>"+args[0]+"</code>");
+            System.err.println("Eval <code>"+o1+"</code>");
+            System.err.println("Result is:<code>"+o+"</code>");
+            System.err.println(JSONPathCompiler.q);
+        }
+        catch(Exception err) {
+                err.printStackTrace();
+        }
+    }
+}
+
+PARSER_END(JSONPathCompiler)
+
+SKIP :
+{
+  " "
+| "\t"
+| "\n"
+| "\r"
+}
+
+TOKEN: {
+  <#LETTER: ["_","a"-"z","A"-"Z"] >
+| <#DIGIT: ["0"-"9"] >
+| <DOT: ".">
+| <INTEGER: <DIGIT> (<DIGIT>)* >
+| <IDENTIFIER: <LETTER> (<LETTER>|<DIGIT>)*>
+| <OPEN_ARRAY: "[">
+| <CLOSE_ARRAY: "]">
+| <OPEN_BRACKET: "(">
+| <CLOSE_BRACKET: ")">
+| <ROOT_ELEMENT: "$">
+| <CURRENT_ELEMENT: "@">
+| <FILTER: "?">
+| <#EQUAL: "=">
+| <#LESS_THAN: "<">
+| <#GREATER_THAN: ">">
+| <COMPARATOR: (<GREATER_THAN>|<LESS_THAN>|<EQUAL>) (<EQUAL>)?>
+}
+
+
+JSONNode expr() #EXPRESSION: 
+{}
+{
+
+    //(array() | object() ) ( array() | <DOT> object())* <EOF>{return jjtThis;}
+   (<DOT>(array() | object()) (filter_expr())?)* <EOF>{return jjtThis;}
+}
+
+void array() #ARRAY:{Token i;} {
+    <OPEN_ARRAY> i=<INTEGER> <CLOSE_ARRAY> {jjtThis.value=new Integer(i.image);}
+}
+
+String object() #OBJECT: { Token name;} {
+    (name=<IDENTIFIER>) 
+    {   jjtThis.value= name.image;
+        return name.image;
+    }
+}
+/*
+JSONNode filter_expr() #FILTEREXPR: {Token i; Token c; String obj;} 
+{
+     <OPEN_ARRAY> <FILTER> <OPEN_BRACKET> <CURRENT_ELEMENT> <DOT> (filter_comp() | filter_regex() | filter_exist() | filter_indirect()) <CLOSE_BRACKET> <CLOSE_ARRAY> 
+}
+*/
+
+JSONNode filter_expr() #FILTEREXPR: {Token i; Token c; String obj;}
+{
+    <OPEN_ARRAY> <FILTER> <OPEN_BRACKET> <CURRENT_ELEMENT> <DOT> obj=object(){System.out.println(obj);} c=<COMPARATOR>  i=<INTEGER> <CLOSE_BRACKET> <CLOSE_ARRAY>
+    {
+        fe.obj = obj;
+        fe.comparator = c.image;
+        fe.val = String.valueOf(i.image);
+        jjtThis.value = fe;
+        return jjtThis;
+    }
+}
+
+
