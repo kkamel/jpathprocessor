@@ -22,12 +22,14 @@ import java.util.Random;
 public class JSONPathCompiler {
     private static final Stack varstack = new Stack();
     
-    
+        
 
     public static FilterExpression fe = new FilterExpression();
 
     public static AQLQuery q = new AQLQuery();
     
+    public static AsterixDbSchema schema = new AsterixDbSchema("/home/kareem/Documents/Research/thesis/jpathprocessor");
+
     public static class JSONNode extends SimpleNode {
 
         JSONNode(int i) {
@@ -112,26 +114,29 @@ public class JSONPathCompiler {
                     return null;
                 }
                 case JJTOBJECT: {
+                    System.out.println("JJTOBJECT");
                     if(o instanceof java.util.Map) {
                             java.util.Map M=java.util.Map.class.cast(o);
                             if (!JSONPathCompiler.varstack.empty() && !(M.get(this.value) instanceof java.util.Map)) {
                                 Object oParent = JSONPathCompiler.varstack.peek(); 
-                                //JSONPathCompiler.varstack.push(this.value);
-                                //JSONPathCompiler.q.add_for(JJTCurrentNodeToAQL(o, oParent));
+                                JSONPathCompiler.varstack.push(o);
+                                JSONPathCompiler.q.add_for(JJTCurrentNodeToAQL(o, oParent));
                                 JSONPathCompiler.q.add_where("$" + o + " = " + this.value);
                                 String obj = o.toString();
                             }
+                            System.out.println("End of JJTOBJECT" + JSONPathCompiler.varstack);
                             return M.get(this.value);
                     }
                     return null;
                 }
                 
                 case JJTFILTEREXPR: {
-                    System.out.println("in filter: " + o);
+                    //System.out.println("in filter: " + o);
                     if (getChildrenCount() == 0)
                         return null;
                     
                     // TODO: Check if JSON object is a Map or Array
+                    /*
                     if (o instanceof java.util.List) {
                         
                         java.util.List L=java.util.List.class.cast(o);
@@ -146,12 +151,57 @@ public class JSONPathCompiler {
                     }
         
                     JSONPathCompiler.q.add_where(JSONPathCompiler.varstack.peek() + "." + fe.toString());
-                        /*
+                    */
                     for (int i=0; o!=null; ++i) {
                         o = at(i).eval(o);
                     }
-                    */
+                    
                     return o;
+                }
+
+                case JJTFILTERCOMP: {
+                    System.out.println("in filterComp: " + o);
+                    if (getChildrenCount() == 0)
+                        return null;
+                    
+                    // TODO: Check if JSON object is a Map or Array
+                    if (o instanceof java.util.List) {
+                        
+                        java.util.List L=java.util.List.class.cast(o);
+                        // Get JSON object and cast to Map
+                        Iterator<Object> lIter = L.iterator();
+                        while (lIter.hasNext()) {
+                            filterComp(lIter.next());
+                        }
+                    }
+                    else {
+                        filterComp(o);
+                    }
+        
+                    JSONPathCompiler.q.add_where(JSONPathCompiler.varstack.peek() + "." + fe.toString());
+                    System.out.println("modified query"); 
+                    return null;
+
+                }
+
+                case JJTFILTEREXIST: {
+                    System.out.println("in filterExist: " + o);
+                    // TODO: Check if JSON object is a Map or Array
+                    if (o instanceof java.util.List) {
+                        
+                        java.util.List L=java.util.List.class.cast(o);
+                        // Get JSON object and cast to Map
+                        Iterator<Object> lIter = L.iterator();
+                        while (lIter.hasNext()) {
+                            filterExist(lIter.next());
+                        }
+                    }
+                    else {
+                        filterExist(o);
+                    }
+        
+                    JSONPathCompiler.q.add_univquantifier(fe.obj.toString(), JSONPathCompiler.varstack.peek().toString());
+                    return null;
                 }
                 
 
@@ -161,7 +211,7 @@ public class JSONPathCompiler {
             }
             return null;
         }
-        void filter_map(Object o) {
+        void filterComp(Object o) {
             java.util.Map M=java.util.Map.class.cast(o);
             Iterator<Entry<String, String>> mapIterator = M.entrySet().iterator();
             // Go through object and check filter condition.
@@ -180,7 +230,30 @@ public class JSONPathCompiler {
                     String obj = o.toString();
                 }
             }
-        }    
+        }
+
+        void filterExist(Object o) {
+
+            java.util.Map M=java.util.Map.class.cast(o);
+            Iterator<Entry<String, String>> mapIterator = M.entrySet().iterator();
+            // Go through object and check filter condition.
+            
+            System.out.println(mapIterator);
+
+            while (mapIterator.hasNext()) {
+                Entry<String, String> entry = mapIterator.next();
+                String k = String.valueOf(entry.getKey());
+                String v = String.valueOf(entry.getValue());
+                System.out.println(k + ": " + v);
+                // Evaluate boolean expression
+                if (fe.obj.equals(k)) {
+                    System.out.println(k + ": " + v);
+                    System.out.println(fe.obj);
+                    String obj = o.toString();
+                }
+            }
+
+        }
         private String JJTCurrentNodeToAQL(Object var1, Object var2) {
             return "for $" + var1 + " in $" + var2 + "\n";   
         }
@@ -338,13 +411,36 @@ String object() #OBJECT: { Token name;} {
         return name.image;
     }
 }
-/*
+
 JSONNode filter_expr() #FILTEREXPR: {Token i; Token c; String obj;} 
 {
-     <OPEN_ARRAY> <FILTER> <OPEN_BRACKET> <CURRENT_ELEMENT> <DOT> (filter_comp() | filter_regex() | filter_exist() | filter_indirect()) <CLOSE_BRACKET> <CLOSE_ARRAY> 
+     <OPEN_ARRAY> <FILTER> <OPEN_BRACKET> <CURRENT_ELEMENT> <DOT> ( LOOKAHEAD(filter_comp()) filter_comp() | filter_exist()) <CLOSE_BRACKET> <CLOSE_ARRAY> 
+     {
+        return jjtThis;
+     }
 }
-*/
 
+void filter_exist() #FILTEREXIST: {String obj;}
+{
+    obj=object()
+    {
+        fe.obj = obj;
+    }
+}
+
+void filter_comp() #FILTERCOMP: {Token i; Token c; String obj;}
+{
+    obj=object()  c=<COMPARATOR>  i=<INTEGER>
+    {
+        fe.obj = obj;
+        fe.comparator = c.image;
+        fe.val = String.valueOf(i.image);
+        jjtThis.value = fe;
+    }
+}
+
+
+/*
 JSONNode filter_expr() #FILTEREXPR: {Token i; Token c; String obj;}
 {
     <OPEN_ARRAY> <FILTER> <OPEN_BRACKET> <CURRENT_ELEMENT> <DOT> obj=object(){System.out.println(obj);} c=<COMPARATOR>  i=<INTEGER> <CLOSE_BRACKET> <CLOSE_ARRAY>
@@ -357,4 +453,4 @@ JSONNode filter_expr() #FILTEREXPR: {Token i; Token c; String obj;}
     }
 }
 
-
+*/
